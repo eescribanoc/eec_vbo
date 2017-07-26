@@ -1,0 +1,6 @@
+name = EEC VBO
+description = Provides additional actions for views bulk operations.
+package = EEC Custom
+dependencies[] = views_bulk_operations
+core = 7.x
+files[] = eec_vbo.module

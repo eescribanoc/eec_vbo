@@ -1,0 +1,332 @@
+<?php
+
+/**
+ * @file
+ */
+
+/**
+ * Implements hook_permission().
+ */
+function eec_vbo_permission() {
+  return array(
+    'move field data action' => array(
+      'title' => t('Run bulk "Move data to another field"'),
+      'description' => t('Perform bulk operations for action "Move data to another field".'),
+    ),
+    'move filefield data action' => array(
+      'title' => t('Run bulk "Move public file data to private field"'),
+      'description' => t('Perform bulk operations for action "Move public file data to private field".'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_action_info().
+ */
+function eec_vbo_action_info() {
+  return array(
+    'eec_vbo_move_field_data_paragraphs_action' => array(
+      'type' => 'paragraphs_item',
+      'label' => t('Paragraphs: Move field data to another field'),
+      'behavior' => array('changes_property'),
+      'configurable' => FALSE,
+      'vbo_configurable' => TRUE,
+      'triggers' => array('any'),
+      'permissions' => array('move field data action'),
+    ),
+    'eec_vbo_move_field_data_node_action' => array(
+      'type' => 'node',
+      'label' => t('Nodes: Move field data to another field'),
+      'behavior' => array('changes_property'),
+      'configurable' => FALSE,
+      'vbo_configurable' => TRUE,
+      'triggers' => array('any'),
+      'permissions' => array('move field data action'),
+    ),
+    'eec_vbo_move_filefield_data_action' => array(
+      'type' => 'node',
+      'label' => t('Nodes: Move public file data to private field'),
+      'behavior' => array('changes_property'),
+      'configurable' => FALSE,
+      'vbo_configurable' => TRUE,
+      'triggers' => array('any'),
+      'permissions' => array('move filefield data action'),
+    ),
+  );
+}
+
+/**
+ * Paragraphs
+ */
+
+/**
+ * Settings form for moving data between fields action form
+ */
+function eec_vbo_move_field_data_paragraphs_action_form($settings, &$form_state) {
+  return _eec_vbo_move_field_data_form('paragraphs_item');
+}
+/**
+ * Settings form for moving data between fields action submit
+ */
+function eec_vbo_move_field_data_paragraphs_action_submit($form, $form_state) {
+  return eec_vbo_move_field_data_action_submit($form, $form_state);
+}
+
+/**
+ * Action callback
+ */
+function eec_vbo_move_field_data_paragraphs_action(&$entity, $context) {
+  eec_vbo_move_field_data_action($entity, $context, 'paragraphs_item');
+}
+
+/**
+ * Node
+ */
+
+/**
+ * Settings form for moving data between fields action form
+ */
+function eec_vbo_move_field_data_node_action_form($settings, &$form_state) {
+  return _eec_vbo_move_field_data_form('node');
+}
+/**
+ * Settings form for moving data between fields action submit
+ */
+function eec_vbo_move_field_data_node_action_submit($form, $form_state) {
+  return eec_vbo_move_field_data_action_submit($form, $form_state);
+}
+
+/**
+ * Action callback
+ */
+function eec_vbo_move_field_data_node_action(&$entity, $context) {
+  eec_vbo_move_field_data_action($entity, $context, 'node');
+}
+
+
+/**
+ * Settings form for moving data between fields action
+ */
+function eec_vbo_move_filefield_data_action_form($settings, &$form_state) {
+  $form = array();
+
+  $fields = _eec_vbo_get_fields_by_field_type_by_entity('file', 'node');
+
+  $form['field_source'] = array(
+    '#type' => 'select',
+    '#title' => t('Select source field'),
+    '#options' => $fields,
+    '#required' => TRUE,
+    '#default_value' => isset($settings['settings']['field_source']) ? $settings['settings']['field_source'] : '',
+  );
+
+  $form['field_destination'] = array(
+    '#type' => 'select',
+    '#title' => t('Select destination field'),
+    '#options' => $fields,
+    '#required' => TRUE,
+    '#default_value' => isset($settings['settings']['field_destination']) ? $settings['settings']['field_destination'] : '',
+  );
+
+  if (module_exists('domain')) {
+    $options = array();
+    $domains = domain_domains();
+    foreach($domains as $domain_id => $domain) {
+      $options[$domain_id] = $domain['subdomain'];
+    }
+
+    $current_domain = domain_get_domain();
+    $form['domains'] = array(
+      '#type' => 'checkboxes',
+      '#title' => t('Choose domains'),
+      '#description' => t('Choose domains for which will be performed this operation.'),
+      '#options' => $options,
+      '#required' => TRUE,
+      '#default_value' => array($current_domain['domain_id']),
+    );
+  }
+
+  return $form;
+}
+
+function eec_vbo_move_filefield_data_action_submit($form, $form_state) {
+  $return = array();
+  $return['field_source'] = $form_state['values']['field_source'];
+  $return['field_destination'] = $form_state['values']['field_destination'];
+  if (isset($form_state['values']['domains'])) {
+    $return['domains'] = array_filter($form_state['values']['domains']);
+  }
+
+  return $return; //Note, return value here must be an array.
+}
+
+/**
+ * Action callback
+ */
+function eec_vbo_move_filefield_data_action(&$node, $context) {
+  $field_source = $context['field_source'];
+  $field_destination = $context['field_destination'];
+  $domains = $context['domains'];
+
+  if (field_info_instance('node', $field_source, $node->type) && $field_destination_info = field_info_instance('node', $field_destination, $node->type)) {
+    if (!empty($node->{$field_source}) && _eec_vbo_check_domains($node->domains, $domains)) {
+      foreach($node->{$field_source}[LANGUAGE_NONE] as $delta => $file) {
+        if ($new_file = _eec_vbo_move_file_to_private($file, $field_destination_info['settings']['file_directory'])) {
+          $node->{$field_destination}[LANGUAGE_NONE][] = (array)$new_file;
+          unset($node->{$field_source}[LANGUAGE_NONE][$delta]);
+        }
+      }
+    }
+  }
+
+}
+
+/**
+ * Performs moving file from public directory to private
+ *
+ * @param $file
+ * @param $file_directory
+ * @return bool|\stdClass
+ */
+function _eec_vbo_move_file_to_private($file, $file_directory) {
+  $file = (object)$file;
+  $path = 'private://' . $file_directory;
+  $new_file = file_copy($file, $path, FILE_EXISTS_REPLACE);
+  file_delete($file);
+  return $new_file;
+}
+
+/**
+ * Checks if domains in node exist in selected list
+ *
+ * @param $domains
+ * @param $domains_selected
+ * @return bool
+ */
+function _eec_vbo_check_domains($domains, $domains_selected) {
+  foreach($domains as $domain) {
+    if (!in_array($domain, $domains_selected)) {
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
+
+/**
+ * Form
+ * @param $entity_type
+ * @return array
+ */
+function _eec_vbo_move_field_data_form($entity_type) {
+  $field_types = _eec_vbo_get_all_field_types();
+  $field_types_selected = isset($form_state['values']['field_types']) ? $form_state['values']['field_types'] : 'link_field';
+
+  $form = array();
+
+  $form['field_types'] = array(
+    '#type' => 'select',
+    '#title' => t('Field types'),
+    '#options' => $field_types,
+    '#default_value' => $field_types_selected,
+    '#ajax' => array(
+      'callback' => 'ajax_dependent_dropdown_callback',
+      'wrapper' => 'dropdown-fields-replace',
+    ),
+  );
+  $form['fields_fieldset'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Select fields' . $field_types_selected),
+    '#prefix' => '<div id="dropdown-fields-replace">',
+    '#suffix' => '</div>',
+  );
+  $form['fields_fieldset']['field_source'] = array(
+    '#type' => 'select',
+    '#title' => t('Select source field' . $field_types_selected),
+    '#options' => _eec_vbo_get_fields_by_field_type_by_entity($field_types_selected, $entity_type),
+    '#required' => TRUE,
+    '#default_value' => isset($settings['settings']['field_source']) ? $settings['settings']['field_source'] : '',
+  );
+
+  $form['fields_fieldset']['field_destination'] = array(
+    '#type' => 'select',
+    '#title' => t('Select destination field' . $field_types_selected),
+    '#options' => _eec_vbo_get_fields_by_field_type_by_entity($field_types_selected, $entity_type),
+    '#required' => TRUE,
+    '#default_value' => isset($settings['settings']['field_destination']) ? $settings['settings']['field_destination'] : '',
+  );
+
+  return $form;
+}
+
+/**
+ * Selects just the second dropdown to be returned for re-rendering.
+ *
+ * Since the controlling logic for populating the form is in the form builder
+ * function, all we do here is select the element and return it to be updated.
+ *
+ * @return array
+ *   Renderable array (the second dropdown)
+ */
+function ajax_dependent_dropdown_callback($form, $form_state) {
+  return $form['fields_fieldset'];
+}
+
+function eec_vbo_move_field_data_action_submit($form, $form_state) {
+  $return = array();
+  $return['field_source'] = $form_state['values']['field_source'];
+  $return['field_destination'] = $form_state['values']['field_destination'];
+
+  return $return; //Note, return value here must be an array.
+}
+
+/**
+ * Action callback
+ */
+function eec_vbo_move_field_data_action(&$entity, $context, $entity_type) {
+  $field_source = $context['field_source'];
+  $field_destination = $context['field_destination'];
+  if (field_info_instance($entity_type, $field_source, $entity->bundle) && $field_destination_info = field_info_instance($entity_type, $field_destination, $entity->bundle)) {
+    $wrapper_source = $wrapper_dest = entity_metadata_wrapper($entity_type, $entity);
+    // To test it out, variable_set('eec_vbo_test_mode_on', TRUE).
+    if (variable_get('eec_vbo_test_mode_on', FALSE) === FALSE) {
+      $wrapper_dest->{$field_destination}->set($wrapper_source->{$field_source}->value());
+    }
+    else {
+      dpm($wrapper_source->{$field_source}->value(), 'source');
+      dpm($wrapper_dest->{$field_destination}->value(), 'dest');
+    }
+  }
+}
+
+/**
+ * Helper function get all field types.
+ *
+ * @return array
+ */
+function _eec_vbo_get_all_field_types() {
+  $field_types = array();
+  foreach (field_info_field_types() as $field_type => $field_type_obj) {
+    $field_types[$field_type] = $field_type_obj['label'];
+  }
+  return $field_types;
+}
+
+/**
+ * Helper function get all fields by entity type.
+ *
+ * @return array
+ */
+function _eec_vbo_get_fields_by_field_type_by_entity($field_type, $entity_type = 'node') {
+  $fields = array();
+  $field_info_instances = field_info_instances($entity_type);
+  foreach($field_info_instances as $entity_type => $field_instances) {
+    foreach($field_instances as $field_key => $field) {
+      $field_info = field_info_field($field_key);
+      if ($field_info['type'] == $field_type) {
+        $fields[$field_key] = $field['label'];
+      }
+    }
+  }
+
+  return $fields;
+}
